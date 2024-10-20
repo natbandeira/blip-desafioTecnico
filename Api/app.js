@@ -2,12 +2,12 @@ const express = require('express');
 const axios = require('axios');
 
 const app = express();
-const PORT = process.env.PORT || 3000; 
+const PORT = process.env.PORT || 3000;
 const GITHUB_API_URL = 'https://api.github.com';
 const USERNAME = 'takenet';
 const MAX_PER_PAGE = 100; // Limite da API
 
-// Buscando todos os repositórios
+// Função que busca todos os repositórios
 async function fetchAllRepos(username) {
     let repos = [];
     let page = 1;
@@ -37,18 +37,34 @@ async function fetchReposByPage(username, page) {
         });
         return response.data;
     } catch (error) {
-        console.error(`Erro ao buscar repositórios da página ${page}:`, error);
-        throw new Error('Erro ao buscar os repositórios');
+        if (error.response) {
+            // Tratando erros
+            const status = error.response.status;
+            if (status === 404) {
+                console.error(`Usuário ${username} não encontrado (404).`);
+                throw new Error('Usuário não encontrado.');
+            } else if (status === 403) {
+                console.error('Limite de requisições excedido ou acesso proibido (403).');
+                throw new Error('Limite de requisições excedido.');
+            } else {
+                console.error(`Erro na API do GitHub (status ${status}):`, error.response.data);
+                throw new Error('Erro ao buscar repositórios.');
+            }
+        } else {
+            // Erro no cliente (sem resposta do servidor)
+            console.error('Erro na requisição:', error.message);
+            throw new Error('Erro ao buscar repositórios.');
+        }
     }
 }
 
-// Filtrando repos por linguagem
+// Função que filtra repos pela lang
 function filterReposByLanguage(repos, language) {
     return repos.filter(repo => repo.language === language);
 }
 
 // Ordenando repositórios do mais antigo para o mais novo
-function sortReposByCreationDate(repos) {
+function sortReposByOldest(repos) {
     return repos.sort((a, b) => new Date(a.created_at) - new Date(b.created_at));
 }
 
@@ -68,15 +84,30 @@ function mapRepoInfo(repos) {
 app.get('/repos', async (req, res) => {
     try {
         const allRepos = await fetchAllRepos(USERNAME);
+        
+        // Verifica se encontrou repositórios com a linguagem C#
         const csharpRepos = filterReposByLanguage(allRepos, 'C#');
-        const sortedRepos = sortReposByCreationDate(csharpRepos);
+        if (csharpRepos.length === 0) {
+            return res.status(404).json({ error: 'Nenhum repositório em C# encontrado.' });
+        }
+
+        const sortedRepos = sortReposByOldest(csharpRepos);
         const oldestRepos = sortedRepos.slice(0, 5);
         const repoInfo = mapRepoInfo(oldestRepos);
 
-        res.json(repoInfo);
+        // Retorna os repositórios encontrados com status 200
+        res.status(200).json(repoInfo);
     } catch (error) {
-        console.error('Erro ao processar a requisição:', error);
-        res.status(500).json({ error: 'Erro ao buscar os repositórios' });
+        if (error.message.includes('Usuário não encontrado')) {
+            // Caso o usuário não seja encontrado
+            res.status(404).json({ error: 'Usuário não encontrado.' });
+        } else if (error.message.includes('Limite de requisições excedido')) {
+            // Caso o limite de requisições da API for excedido
+            res.status(403).json({ error: 'Limite de requisições excedido. Tente novamente mais tarde.' });
+        } else {
+            // Outros problemas internos
+            res.status(500).json({ error: 'Erro ao buscar os repositórios' });
+        }
     }
 });
 
